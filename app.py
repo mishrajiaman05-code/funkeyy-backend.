@@ -4,49 +4,46 @@ import requests
 from bs4 import BeautifulSoup
 
 app = Flask(__name__)
-CORS(app) # Ye line frontend ko connect karne ke liye zaroori hai
+CORS(app)
 
+# --- ASLI USER AGENT ---
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.google.com/"
 }
 
-@app.route('/')
-def home():
-    return "FUNKEYY Backend is LIVE! v5.0 Muzaffarpur Edition"
-
-@app.route('/mega-search', methods=['POST'])
-def mega_search():
-    data = request.json
-    query = data.get('query')
-    if not query:
-        return jsonify({"status": "error", "message": "Bhai query missing hai"}), 400
-    
-    results = []
-    
-    # --- AMAZON SCRAPER ---
+def get_amazon(query):
     try:
-        amz_url = f"https://www.amazon.in/s?k={query}"
-        res = requests.get(amz_url, headers=HEADERS, timeout=10)
+        url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}"
+        res = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
-        item = soup.find('div', {'data-component-type': 's-search-result'})
-        if item:
-            results.append({
-                "store": "Amazon",
-                "title": item.h2.text.strip()[:50] + "...",
-                "price": item.find('span', 'a-price-whole').text,
-                "img": item.find('img', 's-image')['src'],
-                "link": "https://www.amazon.in" + item.h2.a['href']
-            })
-    except Exception as e:
-        print(f"Amazon Error: {e}")
+        
+        # Amazon search results find karne ka naya tarika
+        items = soup.find_all('div', {'data-component-type': 's-search-result'})
+        for item in items:
+            title_el = item.find('h2')
+            price_el = item.find('span', 'a-price-whole')
+            img_el = item.find('img', 's-image')
+            
+            if title_el and price_el:
+                return {
+                    "store": "Amazon",
+                    "title": title_el.text.strip()[:50] + "...",
+                    "price": price_el.text,
+                    "img": img_el['src'] if img_el else "",
+                    "link": "https://www.amazon.in" + title_el.a['href']
+                }
+    except: return None
 
-    # --- FLIPKART SCRAPER ---
+def get_flipkart(query):
     try:
-        flip_url = f"https://www.flipkart.com/search?q={query}"
-        res = requests.get(flip_url, headers=HEADERS, timeout=10)
+        url = f"https://www.flipkart.com/search?q={query.replace(' ', '%20')}"
+        res = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
-        # Common class for Flipkart product cards
+        
+        # Flipkart Multi-layout support (Grid and List)
+        # 1. Mobile/Laptop layout
         item = soup.find('div', {'class': '_1AtV32'}) or soup.find('div', {'class': 'sl_Z_m'})
         if item:
             title = item.find('div', {'class': '_4rR01T'}) or item.find('a', {'class': 'IRpwBC'})
@@ -55,16 +52,30 @@ def mega_search():
             link = item.find('a', {'class': '_1fQZEK'}) or item.find('a', {'class': 'IRpwBC'})
             
             if title and price:
-                results.append({
+                return {
                     "store": "Flipkart",
                     "title": title.text.strip()[:50] + "...",
                     "price": price.text.replace('₹', '').replace(',', ''),
                     "img": img['src'] if img else "",
-                    "link": "https://www.flipkart.com" + link['href'] if link else "#"
-                })
-    except Exception as e:
-        print(f"Flipkart Error: {e}")
+                    "link": "https://www.flipkart.com" + (link['href'] if link.has_attr('href') else "")
+                }
+    except: return None
 
+@app.route('/')
+def home(): return "FUNKEYY v5.0 IS LIVE!"
+
+@app.route('/mega-search', methods=['POST'])
+def mega_search():
+    query = request.json.get('query')
+    if not query: return jsonify({"status": "error"}), 400
+    
+    results = []
+    amz = get_amazon(query)
+    flp = get_flipkart(query)
+    
+    if amz: results.append(amz)
+    if flp: results.append(flp)
+    
     return jsonify({"status": "success", "data": results})
 
 if __name__ == '__main__':
