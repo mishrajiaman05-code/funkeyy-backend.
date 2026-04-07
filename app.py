@@ -2,80 +2,73 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 from bs4 import BeautifulSoup
+import time
 
 app = Flask(__name__)
 CORS(app)
 
-# --- ASLI USER AGENT ---
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Referer": "https://www.google.com/"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def get_amazon(query):
+def fetch_data(url):
     try:
-        url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}"
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # Amazon search results find karne ka naya tarika
-        items = soup.find_all('div', {'data-component-type': 's-search-result'})
-        for item in items:
-            title_el = item.find('h2')
-            price_el = item.find('span', 'a-price-whole')
-            img_el = item.find('img', 's-image')
-            
-            if title_el and price_el:
-                return {
-                    "store": "Amazon",
-                    "title": title_el.text.strip()[:50] + "...",
-                    "price": price_el.text,
-                    "img": img_el['src'] if img_el else "",
-                    "link": "https://www.amazon.in" + title_el.a['href']
-                }
-    except: return None
-
-def get_flipkart(query):
-    try:
-        url = f"https://www.flipkart.com/search?q={query.replace(' ', '%20')}"
-        res = requests.get(url, headers=HEADERS, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        
-        # Flipkart Multi-layout support (Grid and List)
-        # 1. Mobile/Laptop layout
-        item = soup.find('div', {'class': '_1AtV32'}) or soup.find('div', {'class': 'sl_Z_m'})
-        if item:
-            title = item.find('div', {'class': '_4rR01T'}) or item.find('a', {'class': 'IRpwBC'})
-            price = item.find('div', {'class': '_30jeq3'})
-            img = item.find('img', {'class': '_396cs4'}) or item.find('img', {'class': '_2r_T1I'})
-            link = item.find('a', {'class': '_1fQZEK'}) or item.find('a', {'class': 'IRpwBC'})
-            
-            if title and price:
-                return {
-                    "store": "Flipkart",
-                    "title": title.text.strip()[:50] + "...",
-                    "price": price.text.replace('₹', '').replace(',', ''),
-                    "img": img['src'] if img else "",
-                    "link": "https://www.flipkart.com" + (link['href'] if link.has_attr('href') else "")
-                }
-    except: return None
+        # 2-3 baar try karega agar fail hua toh
+        for _ in range(2):
+            response = requests.get(url, headers=HEADERS, timeout=10)
+            if response.status_code == 200:
+                return response.text
+            time.sleep(1)
+    except:
+        return None
+    return None
 
 @app.route('/')
-def home(): return "FUNKEYY v5.0 IS LIVE!"
+def home():
+    return "FUNKEYY ENGINE IS RUNNING!"
 
 @app.route('/mega-search', methods=['POST'])
 def mega_search():
     query = request.json.get('query')
-    if not query: return jsonify({"status": "error"}), 400
+    if not query:
+        return jsonify({"status": "error", "message": "No query"}), 400
     
     results = []
-    amz = get_amazon(query)
-    flp = get_flipkart(query)
     
-    if amz: results.append(amz)
-    if flp: results.append(flp)
-    
+    # --- AMAZON SEARCH ---
+    amz_html = fetch_data(f"https://www.amazon.in/s?k={query}")
+    if amz_html:
+        soup = BeautifulSoup(amz_html, 'html.parser')
+        item = soup.find('div', {'data-component-type': 's-search-result'})
+        if item:
+            try:
+                results.append({
+                    "store": "Amazon",
+                    "title": item.h2.text.strip()[:50] + "...",
+                    "price": item.find('span', 'a-price-whole').text,
+                    "img": item.find('img', 's-image')['src'],
+                    "link": "https://www.amazon.in" + item.h2.a['href']
+                })
+            except: pass
+
+    # --- FLIPKART SEARCH ---
+    flip_html = fetch_data(f"https://www.flipkart.com/search?q={query}")
+    if flip_html:
+        soup = BeautifulSoup(flip_html, 'html.parser')
+        # Sabse simple selector use kar rahe hain jo block kam hota hai
+        cards = soup.find_all('div', recursive=True)
+        for card in cards:
+            price = card.find('div', string=lambda x: x and '₹' in x)
+            if price and len(results) < 2: # Sirf ek result uthao
+                results.append({
+                    "store": "Flipkart",
+                    "title": f"{query} on Flipkart",
+                    "price": price.text.replace('₹', '').replace(',', ''),
+                    "img": "https://static-assets-web.flixcart.com/fk-p-linchpin-web/fk-cp-zion/img/flipkart-plus_8d85f4.png",
+                    "link": f"https://www.flipkart.com/search?q={query}"
+                })
+                break
+
     return jsonify({"status": "success", "data": results})
 
 if __name__ == '__main__':
